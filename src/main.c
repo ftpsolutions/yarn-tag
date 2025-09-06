@@ -8,9 +8,6 @@
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <string.h>
-#include <zephyr/logging/log.h>
-
-LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* --- LIS2DH12 accelerometer configuration ------------------------------ */
 
@@ -373,16 +370,13 @@ static void user_button_isr(const struct device *dev, struct gpio_callback *cb, 
     int64_t now = k_uptime_get();
     if (level > 0) {
         btn_pressed_ms = now;
-        LOG_INF("button pressed");
     } else {
         if (btn_pressed_ms >= 0) {
             int64_t dur = now - btn_pressed_ms;
             btn_pressed_ms = -1;
             if (dur >= LONG_PRESS_MS) {
-                LOG_INF("long press (%lld ms)", dur);
                 start_connectable_window(60);
             } else if (dur >= SHORT_MIN_MS && dur <= SHORT_PRESS_MAX_MS) {
-                LOG_INF("short press (%lld ms)", dur);
                 reset_trigger();
                 k_work_submit(&green_double_work);
             }
