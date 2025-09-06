@@ -8,6 +8,9 @@
 #include <zephyr/bluetooth/conn.h>
 #include <zephyr/bluetooth/gatt.h>
 #include <string.h>
+#include <zephyr/logging/log.h>
+
+LOG_MODULE_REGISTER(main, CONFIG_LOG_DEFAULT_LEVEL);
 
 /* --- LIS2DH12 accelerometer configuration ------------------------------ */
 
@@ -130,6 +133,18 @@ static inline void flash_ctx_stop(struct flash_ctx *ctx)
 {
     k_work_cancel_delayable(&ctx->work);
     gpio_pin_set_dt(ctx->led, 0);
+}
+
+/* Power-on self-test LED sequence: red, green, blue */
+static void led_post(void)
+{
+    const struct gpio_dt_spec *seq[] = { &led_red, &led_green, &led_blue };
+    for (size_t i = 0; i < ARRAY_SIZE(seq); i++) {
+        gpio_pin_set_dt(seq[i], 1);
+        k_msleep(100);
+        gpio_pin_set_dt(seq[i], 0);
+        k_msleep(100);
+    }
 }
 
 static void flash_green_once(struct k_work *work)
@@ -358,13 +373,16 @@ static void user_button_isr(const struct device *dev, struct gpio_callback *cb, 
     int64_t now = k_uptime_get();
     if (level > 0) {
         btn_pressed_ms = now;
+        LOG_INF("button pressed");
     } else {
         if (btn_pressed_ms >= 0) {
             int64_t dur = now - btn_pressed_ms;
             btn_pressed_ms = -1;
             if (dur >= LONG_PRESS_MS) {
+                LOG_INF("long press (%lld ms)", dur);
                 start_connectable_window(60);
             } else if (dur >= SHORT_MIN_MS && dur <= SHORT_PRESS_MAX_MS) {
+                LOG_INF("short press (%lld ms)", dur);
                 reset_trigger();
                 k_work_submit(&green_double_work);
             }
@@ -420,16 +438,18 @@ int main(void)
     gpio_pin_configure_dt(&led_green, GPIO_OUTPUT_INACTIVE);
     gpio_pin_configure_dt(&led_blue, GPIO_OUTPUT_INACTIVE);
 
+    led_post();
+
     gpio_pin_configure_dt(&lis_irq, GPIO_INPUT | GPIO_PULL_UP);
     gpio_pin_interrupt_configure_dt(&lis_irq, GPIO_INT_EDGE_TO_ACTIVE);
     gpio_init_callback(&irq_cb, lis_int_isr, BIT(lis_irq.pin));
     gpio_add_callback(lis_irq.port, &irq_cb);
 
 #if DT_NODE_HAS_STATUS(SW0_NODE, okay)
-    gpio_pin_interrupt_configure_dt(&user_btn, GPIO_INT_EDGE_BOTH);
+    gpio_pin_configure_dt(&user_btn, GPIO_INPUT | GPIO_PULL_UP);
     gpio_init_callback(&btn_cb, user_button_isr, BIT(user_btn.pin));
     gpio_add_callback(user_btn.port, &btn_cb);
-    gpio_pin_configure_dt(&user_btn, GPIO_INPUT);
+    gpio_pin_interrupt_configure_dt(&user_btn, GPIO_INT_EDGE_BOTH);
 #endif
 
     err = bt_enable(NULL);
