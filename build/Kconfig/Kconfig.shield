@@ -1,0 +1,2 @@
+osource "/Users/acea/Documents/FTP/software/yarn-tag/boards/shields/*/Kconfig.shield"
+osource "/opt/nordic/ncs/v2.5.0/nrf/boards/shields/*/Kconfig.shield"

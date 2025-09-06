@@ -1,6 +1,6 @@
+.DS_Store
 /nrf-sdk
 /release
 
 ram.bin
 _build/
-
