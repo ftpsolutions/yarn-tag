@@ -99,6 +99,63 @@ static struct k_work_delayable conn_timeout_work;
 static struct k_work_delayable session_timeout_work;
 static struct k_work_delayable battery_work;
 
+struct flash_ctx {
+    struct k_work_delayable work;
+    const struct gpio_dt_spec *led;
+};
+
+static void flash_cycle(struct k_work *work)
+{
+    struct flash_ctx *ctx = CONTAINER_OF(work, struct flash_ctx, work);
+    gpio_pin_set_dt(ctx->led, 1);
+    k_msleep(100);
+    gpio_pin_set_dt(ctx->led, 0);
+    k_work_schedule(&ctx->work, K_SECONDS(5));
+}
+
+static inline void flash_ctx_init(struct flash_ctx *ctx,
+                                  const struct gpio_dt_spec *led)
+{
+    k_work_init_delayable(&ctx->work, flash_cycle);
+    ctx->led = led;
+}
+
+static inline void flash_ctx_start(struct flash_ctx *ctx)
+{
+    k_work_cancel_delayable(&ctx->work);
+    k_work_schedule(&ctx->work, K_NO_WAIT);
+}
+
+static inline void flash_ctx_stop(struct flash_ctx *ctx)
+{
+    k_work_cancel_delayable(&ctx->work);
+    gpio_pin_set_dt(ctx->led, 0);
+}
+
+static void flash_green_once(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    gpio_pin_set_dt(&led_green, 1);
+    k_msleep(100);
+    gpio_pin_set_dt(&led_green, 0);
+}
+
+static void flash_green_twice(struct k_work *work)
+{
+    ARG_UNUSED(work);
+    for (int i = 0; i < 2; i++) {
+        gpio_pin_set_dt(&led_green, 1);
+        k_msleep(100);
+        gpio_pin_set_dt(&led_green, 0);
+        k_msleep(100);
+    }
+}
+
+static struct flash_ctx red_flash;
+static struct flash_ctx blue_flash;
+static struct k_work green_flash_work;
+static struct k_work green_double_work;
+
 static bool connectable_mode;
 static struct bt_conn *curr_conn;
 
@@ -130,6 +187,7 @@ static ssize_t write_thresh(struct bt_conn *conn, const struct bt_gatt_attr *att
     uint8_t *val = attr->user_data;
     *val = *(const uint8_t *)buf;
     (void)lis_config_high_g(3, *val, 0x01);
+    k_work_submit(&green_flash_work);
     return len;
 }
 
@@ -207,14 +265,14 @@ static void switch_to_slow_adv(struct k_work *work)
     connectable_mode = false;
     (void)bt_le_adv_stop();
     (void)bt_le_adv_start(&adv_slow, ad_nonconn, ARRAY_SIZE(ad_nonconn), NULL, 0);
-    gpio_pin_set_dt(&led_red, 0);
+    flash_ctx_stop(&red_flash);
+    flash_ctx_stop(&blue_flash);
 }
 
 static void conn_timeout(struct k_work *work)
 {
     ARG_UNUSED(work);
     switch_to_slow_adv(NULL);
-    gpio_pin_set_dt(&led_blue, 0);
 }
 
 static void session_timeout(struct k_work *work)
@@ -251,7 +309,8 @@ static void start_connectable_window(int seconds)
 
     (void)bt_le_adv_stop();
     (void)bt_le_adv_start(&adv_conn, ad_conn, ARRAY_SIZE(ad_conn), NULL, 0);
-    gpio_pin_set_dt(&led_blue, 1);
+    flash_ctx_stop(&blue_flash);
+    flash_ctx_start(&red_flash);
     k_work_reschedule(&conn_timeout_work, K_SECONDS(seconds));
 }
 
@@ -265,7 +324,6 @@ static void set_triggered_and_burst(bool value)
     update_adv_payload();
     (void)bt_le_adv_stop();
     (void)bt_le_adv_start(&adv_fast, ad_nonconn, ARRAY_SIZE(ad_nonconn), NULL, 0);
-    gpio_pin_set_dt(&led_red, value ? 1 : 0);
     k_work_reschedule(&slow_adv_work, K_SECONDS(45));
 }
 
@@ -273,7 +331,6 @@ static void reset_trigger(void)
 {
     triggered_state = 0;
     update_adv_payload();
-    gpio_pin_set_dt(&led_red, 0);
 }
 
 /* --- ISRs --------------------------------------------------------------- */
@@ -309,6 +366,7 @@ static void user_button_isr(const struct device *dev, struct gpio_callback *cb, 
                 start_connectable_window(60);
             } else if (dur >= SHORT_MIN_MS && dur <= SHORT_PRESS_MAX_MS) {
                 reset_trigger();
+                k_work_submit(&green_double_work);
             }
         }
     }
@@ -325,6 +383,8 @@ static void connected(struct bt_conn *conn, uint8_t err)
     curr_conn = bt_conn_ref(conn);
     k_work_cancel_delayable(&conn_timeout_work);
     k_work_reschedule(&session_timeout_work, K_MINUTES(2));
+    flash_ctx_stop(&red_flash);
+    flash_ctx_start(&blue_flash);
 }
 
 static void disconnected(struct bt_conn *conn, uint8_t reason)
@@ -384,6 +444,10 @@ int main(void)
     k_work_init_delayable(&conn_timeout_work, conn_timeout);
     k_work_init_delayable(&session_timeout_work, session_timeout);
     k_work_init_delayable(&battery_work, check_battery);
+    flash_ctx_init(&red_flash, &led_red);
+    flash_ctx_init(&blue_flash, &led_blue);
+    k_work_init(&green_flash_work, flash_green_once);
+    k_work_init(&green_double_work, flash_green_twice);
 
     update_adv_payload();
     (void)bt_le_adv_start(&adv_slow, ad_nonconn, ARRAY_SIZE(ad_nonconn), NULL, 0);
